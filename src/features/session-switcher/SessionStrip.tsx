@@ -14,7 +14,12 @@ import {
 } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { Menu, type MenuItem } from '@/components/ui/Menu'
+import {
+  CHILD_UNREAD_HINT,
+  useChildActivityStore,
+} from '@/features/handoffs/child-activity-store'
 import { backgroundChildrenByMother } from '@/features/handoffs/crew'
+import { endSessionAsked } from '@/features/handoffs/end-child'
 import {
   motherOfChildMap,
   nestUnderMothers,
@@ -86,7 +91,6 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
   const panes = useAppStore((s) => s.panes)
   const focusPaneId = useAppStore((s) => s.focusPaneId)
   const focusOrOpenSession = useAppStore((s) => s.focusOrOpenSession)
-  const endSession = useAppStore((s) => s.endSession)
   // Filhas de handoff sem pane aberta vivem no Crew Dock, não na barra — senão o
   // usuário fica com N chips pra monitorar. Abriu o terminal de uma, ela ganha
   // chip aqui como qualquer sessão (ver useVisibleLiveSessions).
@@ -324,7 +328,7 @@ export function SessionStrip({ onOpenSwitcher }: Props) {
                     // lugar (a medição seguinte não oscila).
                     hidden={clipped.hidden.includes(index)}
                     onOpen={() => void focusOrOpenSession(item)}
-                    onEnd={() => endSession(item.id)}
+                    onEnd={() => endSessionAsked(item.id)}
                     onTogglePin={() => void togglePin(item.id)}
                     onToggleMother={() => void setMotherPinned(item.id, !isPinnedMother)}
                   />
@@ -560,23 +564,30 @@ function Chip({
           <ProviderBadge provider={item.provider} />
         </button>
         <SessionFeatureChip sessionId={item.id} density="dot" />
-        {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido). */}
-        {isPinned && <PinButton isPinned onTogglePin={onTogglePin} />}
       </div>
+      {/* Fixado: o próprio botão vira o indicador (sempre visível, preenchido), em
+          coluna só dele. No fim do conteúdo ficava debaixo das ações do hover, e
+          quem ia desafixar acertava "Marcar como mãe" ou "Encerrar". */}
+      {isPinned && (
+        <span className="col-start-2 row-start-1 ml-1.5 flex items-center">
+          <PinButton isPinned onTogglePin={onTogglePin} />
+        </span>
+      )}
       {/* Ações do hover sobrepostas à ponta da aba: ao lado do nome, eram ~40px
           de vão morto em cada aba; inline no hover, a aba crescia e empurrava as
           vizinhas. Dividem a célula do grid com o conteúdo, invisíveis mas com
           largura, afastadas do começo dela: a aba de nome curto alarga só o que
           falta para os glifos e o início do nome ficarem fora delas — sobrepostas
           com `absolute`, cobriam o botão inteiro e o clique caía nelas. `relative`
-          as mantém por cima do conteúdo; a margem negativa leva até a borda.
+          as mantém por cima do conteúdo; a margem negativa leva até a borda — menos
+          no chip fixado, onde a borda é do indicador e a faixa para antes dele.
           Chip cortado não as revela: `visible` aqui venceria o `hidden` herdado. */}
       <span
         data-testid="strip-chip-actions"
         style={{ marginLeft: leadGlyphs * LEAD_GLYPH_PX + LEAD_NAME_PX }}
-        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end rounded-r-lg bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
+        className={`relative col-start-1 row-start-1 flex items-center gap-1.5 self-stretch justify-self-end bg-[var(--color-surface-2)] pl-1.5 pr-2 invisible ${
           hidden ? '' : 'group-focus-within:visible group-hover:visible'
-        } ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}
+        } ${isPinned ? '' : `rounded-r-lg ${depth > 0 ? '-mr-2' : '-mr-2.5'}`}`}
       >
         {!isPinned && <PinButton isPinned={false} onTogglePin={onTogglePin} />}
         {onToggleMother && (
@@ -643,10 +654,16 @@ function BackgroundChildrenChip({
   // Some junto com o chip da mãe: sem ela ao lado o "↳" fica solto. Com filha
   // aguardando ele fica — escondido, nada na barra apontaria para ela.
   const hidden = motherHidden && !waiting
-  const items: MenuItem[] = sessions.map((s) => ({
-    label: `${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
-    onClick: () => onOpen(s),
-  }))
+  const unread = useChildActivityStore((s) => s.unread)
+  const unreadCount = sessions.filter((s) => unread[s.id]).length
+  const items: MenuItem[] = sessions.map((s) => {
+    const reason = unread[s.id]
+    return {
+      label: `${reason ? '● ' : ''}${liveSessionLabel(s)} · ${statusLabel(s.status)}`,
+      onClick: () => onOpen(s),
+      ...(reason ? { title: CHILD_UNREAD_HINT[reason] } : {}),
+    }
+  })
   return (
     <div className="flex shrink-0">
       <Menu open={menuOpen} onClose={() => setMenuOpen(false)} items={items} portal align="left">
@@ -661,12 +678,23 @@ function BackgroundChildrenChip({
           style={hidden ? { visibility: 'hidden' } : undefined}
           aria-expanded={menuOpen}
           onClick={() => setMenuOpen((v) => !v)}
-          title={`${hint}${waiting ? ' (há filha aguardando você)' : ''} — clique para abrir a aba de uma delas`}
-          className={`flex h-6 items-center whitespace-nowrap rounded-lg px-1.5 text-[10px] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)] ${
+          title={`${hint}${waiting ? ' (há filha aguardando você)' : ''}${
+            unreadCount > 0 ? ` (${unreadCount} com novidade que você não viu)` : ''
+          } — clique para abrir a aba de uma delas`}
+          className={`relative flex h-6 items-center whitespace-nowrap rounded-lg px-1.5 text-[10px] transition hover:bg-[var(--color-surface-2)]/60 hover:text-[var(--color-text)] ${
             waiting ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-dim)]'
           }`}
         >
           ↳ {sessions.length} em 2º plano
+          {/* Sobreposto ao respiro do chip: com largura própria, a medição do
+              "+N" de overflow mudaria a cada mensagem. */}
+          {unreadCount > 0 && (
+            <span
+              data-testid="strip-background-unread"
+              aria-hidden
+              className="absolute right-0 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]"
+            />
+          )}
         </button>
       </Menu>
     </div>

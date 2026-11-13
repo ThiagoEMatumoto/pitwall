@@ -312,11 +312,26 @@ export interface Handoff {
   // Passagem de bastão: sessions.id da filha que a atual substituiu (a antecessora
   // segue viva até o humano encerrar). NULL = nunca houve bastão neste handoff.
   predecessorSessionId: string | null
+  // O usuário encerrou a filha de propósito (X da aba / Encerrar). NÃO desvincula
+  // nem é desfecho: a filha segue ligada à mãe e retomável; retomar limpa a marca.
+  // NULL = nunca encerrada pelo usuário (ou já retomada).
+  endedByUserAt: number | null
+  // DERIVADO (não é coluna): a filha concluiu (done) e a sessão dela saiu pela
+  // hibernação (sessions.hibernated_at). Dormindo: segue vinculada, sem processo,
+  // e volta por "Acordar" ou quando a mãe chama (handoff_message).
+  childAsleep: boolean
   // DERIVADO (não é coluna): este handoff interrompido pode ser retomado via
   // `claude --resume`? Só é true com status 'interrupted', filha atrelada e o
   // transcript dela ainda no disco — o mesmo gate do handoffs:is-resumable, agora
   // servido junto da lista pra o dock decidir quem fica sem um IPC por card.
   resumable: boolean
+}
+
+// Resposta de handoffs:wake-child: o handoff como ficou e o sessions.id da PTY
+// que agora roda a filha (linha nova do relance, ou a que já estava viva).
+export interface WokenHandoffChild {
+  handoff: Handoff
+  sessionId: string
 }
 
 // Resolve o repo-alvo de um handoff + metadados do projeto, pra UI poder spawnar
@@ -2717,6 +2732,10 @@ export interface Api {
       command?: string
     }): Promise<{ ok: true; rule: string; added: boolean } | { ok: false; reason: string }>
     release(id: string): Promise<Handoff>
+    // Encerrar pelo usuário (ended: true) e o Desfazer dele (false). Recebe a
+    // SESSÃO: quem resolve se ela é filha vinculada é o main (null = não é, nada
+    // muda). Só carimba o handoff — não mata a PTY nem desvincula.
+    setChildEnded(input: { sessionId: string; ended: boolean }): Promise<Handoff | null>
     // Vínculo mãe/filha da sessão na régua única (childLinkState): decide entre
     // "Tornar filha", "Re-vincular", "Trocar mãe" e "Desvincular".
     childLink(sessionId: string): Promise<ChildLinkInfo>
@@ -2731,6 +2750,9 @@ export interface Api {
     // re-injeta o kickoff e devolve o handoff a 'running'. Rejeita se o status não
     // for 'interrupted' ou se o transcript da filha não existir mais.
     resume(id: string): Promise<Handoff>
+    // Acorda a filha concluída que dorme (childAsleep): relança com a identidade
+    // dela e sem kickoff. O handoff segue done.
+    wakeChild(id: string): Promise<WokenHandoffChild>
     // Gate de UI do "Retomar": true só se o handoff está interrompido E o
     // transcript da filha ainda existe (mesma checagem do resume).
     isResumable(id: string): Promise<boolean>

@@ -112,6 +112,13 @@ export async function sendWakingDormant(input: SendPromptInput): Promise<SendPro
   return promptQueue.send({ ...input, sessionId: woke.sessionId, when: 'on-idle' })
 }
 
+// O canal sessions:send-prompt só é alcançado pela UI (composer, QuickComposer,
+// cartão do mapa): quem escreveu foi o usuário, mesmo com outra sessão como origem.
+export function sendFromUser(raw: unknown): Promise<SendPromptResult> {
+  const input: SendPromptInput = sendSchema.parse(raw)
+  return sendWakingDormant({ ...input, by: 'human' })
+}
+
 let lastNotifiedEventId: string | null = null
 
 // Mensagem que não vai chegar nunca merece aviso fora do app: quem mandou
@@ -157,9 +164,9 @@ export const promptQueue = new PromptQueue({
   },
   write: (id, text, raw) => (raw ? ptyManager.write(id, text) : injectIntoSession(id, text)),
   // Origem que já morreu não tem cartão vivo no mapa para a bolinha sair.
-  delivered: (to, from) => {
+  delivered: (to, from, by) => {
     if (from && ptyManager.isRunning(from)) {
-      emitSessionLinkPulse({ fromSessionId: from, toSessionId: to, kind: 'message' })
+      emitSessionLinkPulse({ fromSessionId: from, toSessionId: to, kind: 'message', by })
     }
   },
   emit: (snapshot) => {
@@ -267,10 +274,7 @@ export function registerSendPromptIpc(): void {
   ptyManager.on('data', (e) => tailFeed.onData(e.sessionId))
   ptyManager.on('exit', (e) => tailFeed.onExit(e.sessionId))
 
-  ipcMain.handle('sessions:send-prompt', (_e, raw: unknown) => {
-    const input: SendPromptInput = sendSchema.parse(raw)
-    return sendWakingDormant(input)
-  })
+  ipcMain.handle('sessions:send-prompt', (_e, raw: unknown) => sendFromUser(raw))
   ipcMain.handle('prompt-queue:cancel', (_e, raw: unknown) => {
     const { id } = idSchema.parse(raw)
     return promptQueue.cancel(id)

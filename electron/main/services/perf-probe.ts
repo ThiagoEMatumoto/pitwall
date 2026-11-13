@@ -48,11 +48,32 @@ export function perfOut(channel: string): void {
 
 export function perfTime<T>(name: string, fn: () => T): T {
   if (!enabled) return fn()
-  return timed(fn, (ms) => {
-    const span = spanOf(name)
-    span.n += 1
-    addDuration(span, ms)
-  })
+  return timed(fn, (ms) => addSpan(name, ms))
+}
+
+export type PerfWait = <T>(name: string, wait: () => Promise<T>) => Promise<T>
+
+// Trecho assíncrono que espera por terceiros (renderer, fila): o span `name` fica
+// só com o tempo fora das esperas passadas por wait, e cada espera sai no span
+// dela. Sem isso o span mistura o custo do trecho com o tempo que ele ficou parado.
+export function perfSelfTime<T>(name: string, fn: (wait: PerfWait) => Promise<T>): Promise<T> {
+  if (!enabled) return fn((_name, wait) => wait())
+  let waitedMs = 0
+  const wait: PerfWait = (waitName, waiting) =>
+    timed(waiting, (ms) => {
+      waitedMs += ms
+      addSpan(waitName, ms)
+    })
+  return timed(
+    () => fn(wait),
+    (ms) => addSpan(name, ms - waitedMs),
+  )
+}
+
+function addSpan(name: string, ms: number): void {
+  const span = spanOf(name)
+  span.n += 1
+  addDuration(span, ms)
 }
 
 function timed<T>(fn: () => T, done: (ms: number) => void): T {

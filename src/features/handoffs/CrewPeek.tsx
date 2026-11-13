@@ -9,6 +9,8 @@ import { liveSessionLabel } from '@/features/session-switcher/session-label'
 import { peekAttentionItem } from './peek-attention'
 import { Terminal } from '@/features/sessions/Terminal'
 import { handoffsApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
+import { revealChildOnUserMessage } from './reveal-child'
 import { useQuickComposerStore } from '@/features/quick-composer/quick-composer-store'
 import { matchCombo, resolveCombo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -24,11 +26,13 @@ import { peekRole, peekRoleLabel, stripOrder, type PeekRole } from './peek-ident
 import { sessionFromLiveSession, useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import {
+  ASLEEP_BADGE,
   STATUS_COLOR,
   STATUS_LABEL,
   SUCCESSOR_PENDING_BADGE,
   StatusBadge,
   childIdentity,
+  childProcessAlive,
   contextLabel,
   liveActivityLabel,
   liveBadgeFor,
@@ -355,7 +359,11 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
   const repoLabel = handoff
     ? (handoff.targetRepoLabel ?? handoff.targetRepoId)
     : (live?.repo?.label ?? 'Avulsa')
-  const badge = identity?.successorPending ? SUCCESSOR_PENDING_BADGE : liveBadgeFor(live ?? undefined)
+  const badge = identity?.successorPending
+    ? SUCCESSOR_PENDING_BADGE
+    : handoff?.childAsleep && !childProcessAlive(live)
+      ? ASLEEP_BADGE
+      : liveBadgeFor(live ?? undefined)
   const activityLabel = liveActivityLabel(live?.lastActivityAt ?? null, Date.now())
   const ctxLabel = contextLabel(live?.tokens)
 
@@ -409,12 +417,16 @@ function CrewPeekPanel({ handoff, live, mode, origin, siblings, onClose, animate
     setSending(true)
     setError(null)
     try {
+      // A aba da filha abre antes do envio, em segundo plano: este painel é modal
+      // e o erro tem de continuar aqui. Envio aceito, ele dá lugar à aba.
+      const opened = await revealChildOnUserMessage(handoff.childSessionId, { focus: false })
       await handoffsApi.sendMessage({ id: handoff.id, text })
       setMessage('')
+      if (opened) promoteToTab()
     } catch (err) {
       // Filha morreu entre o render e o envio é o caso comum: mostra o motivo e
       // preserva o texto pro usuário não perder o que digitou.
-      setError(err instanceof Error ? err.message : 'Não foi possível entregar a mensagem.')
+      setError(err instanceof Error ? ipcErrorMessage(err) : 'Não foi possível entregar a mensagem.')
     } finally {
       setSending(false)
       await load()

@@ -49,6 +49,8 @@ import { useSessionPrefsStore } from '@/lib/session-prefs-store'
 import { batonApi, projectsApi, sessionsApi, workspaceApi } from '@/lib/ipc'
 import { showToast } from '@/features/notifications/toast-store'
 import { childrenMissedToast } from '@/features/handoffs/crew'
+import { listenChildActivity } from '@/features/handoffs/child-activity-store'
+import { closeChildTab, useIsLinkedChild } from '@/features/handoffs/end-child'
 import { layoutRestoreStep } from '../../shared/dock-layout-restore'
 import { formatCombo, matchCombo, resolveCombo, type Combo } from '@/lib/keybindings'
 import { useKeybindingsStore } from '@/lib/keybindings-store'
@@ -154,6 +156,7 @@ function TerminalPanel(props: IDockviewPanelProps<PaneParams>) {
       projectIcon={pane.projectIcon}
       projectColor={pane.projectColor}
       mode={pane.mode}
+      background={pane.background}
       onToggleMode={() => setPaneMode(pane.paneId, pane.mode === 'chat' ? 'terminal' : 'chat')}
       onClose={() => closePane(pane.paneId)}
       onTitleChange={(t) => props.api.setTitle(t)}
@@ -180,6 +183,10 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
   // marca da feature errada (ou a nenhuma).
   const pane = useAppStore((s) => s.panes.find((p) => p.paneId === props.api.id))
   const color = (pane ?? props.params.pane)?.projectColor ?? null
+  // O X (e o clique do meio) da aba de uma FILHA encerra o processo; o das outras
+  // só tira a aba da tela. Ctrl+W e fechar o grupo seguem minimizando sempre.
+  const isChild = useIsLinkedChild(pane?.session.id)
+  const paneId = props.api.id
   return (
     <div className="flex items-center">
       <span
@@ -188,7 +195,15 @@ function TerminalTab(props: IDockviewPanelHeaderProps<PaneParams>) {
       />
       {/* Antes do título: depois dele o badge ficava do lado de fora do X. */}
       <ProviderBadge provider={pane?.session.provider} className="mr-0.5" />
-      <DockviewDefaultTab {...props} />
+      <DockviewDefaultTab
+        {...props}
+        title={
+          isChild
+            ? 'Fechar (X) encerra a filha: mata o processo; ela segue vinculada à mãe e retomável. Para só tirar da tela, use Minimizar'
+            : 'Fechar (X) só tira a aba da tela; não encerra a sessão'
+        }
+        closeActionOverride={isChild ? () => closeChildTab(paneId) : undefined}
+      />
       {pane?.dormant && !pane.restoreError && (
         <span
           role="img"
@@ -412,6 +427,9 @@ export function AppShell() {
 
   useEffect(() => listenSessionFeatureChanges(), [])
 
+  // Mensagem da mãe para filha sem aba: marca não lida e avisa, sem roubar o foco.
+  useEffect(() => listenChildActivity(), [])
+
   // Restore do layout exato. Quando há pendingLayout, aplicamos api.fromJSON UMA
   // vez — em vez de deixar o effect de reconciliação criar os painéis no arranjo
   // padrão. Esperamos as panes do restore (criadas com os paneIds salvos) já
@@ -524,6 +542,20 @@ export function AppShell() {
           continue
         }
         const active = api.activePanel
+        // Nascida em segundo plano: aba INATIVA no grupo do ativo, sem gastar a
+        // intent do atalho. Ativa, o xterm dela tomaria o teclado.
+        if (pane.background && active) {
+          api.addPanel<PaneParams>({
+            id: pane.paneId,
+            component: 'terminal',
+            tabComponent: 'terminal',
+            title: paneTabTitle(pane),
+            params: { pane },
+            position: { referencePanel: active.id, direction: 'within' },
+            inactive: true,
+          })
+          continue
+        }
         const intent = nextPosition.current
         // Sem ativo: primeiro painel, sem posição relativa. Com ativo: 'tab' entra no
         // mesmo grupo (within); 'right'/'below' fazem split; default (clique) = right.

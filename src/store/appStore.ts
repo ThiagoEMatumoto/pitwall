@@ -1,9 +1,11 @@
 import { create } from 'zustand'
-import { motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { handoffsApi, motherPinsApi, prefsApi, roomApi, sessionsApi, workspaceApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { dismissToast, showToast } from '@/features/notifications/toast-store'
 import { composerDraftKey } from '@/features/sessions/composer-draft-persister'
 import { paneActivity } from '@/features/sessions/pane-activity'
 import { oomToastText } from '@/features/sessions/oom-toast'
+import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { useSessionFeatureStore } from '@/store/sessionFeatureStore'
 import { providerSupports } from '../../shared/agent-providers'
 import { layoutToRestore } from '../../shared/dock-layout-restore'
@@ -85,6 +87,13 @@ export interface ActivePane {
   // Dormant porque a sessão hibernou por ociosidade (o main deu /exit nela): a
   // aba mostra "hibernada" no lugar de "dormindo". O wake é o mesmo.
   dormantReason?: 'hibernated'
+  // Nasceu em segundo plano (focusOrOpenSession com background): o mapa não cede
+  // a vista e o terminal novo não toma o teclado de quem digita em outra tela. O
+  // layout a cria como aba inativa; sem outra aba ao lado ela entra ativa (inativa,
+  // ficaria vazia) e é o Terminal que deixa de focar ao montar. Vale para essa
+  // montagem só: o Terminal a apaga (clearPaneBackground), senão a aba acordaria
+  // da hibernação sem teclado. Não vai ao open_panes.
+  background?: true
 }
 
 const DORMANT_ID_PREFIX = 'dormant:'
@@ -145,12 +154,6 @@ function dormantPaneFromSnapshot(
     dormant: true,
     ...(restoreError ? { restoreError } : {}),
   }
-}
-
-// "Error invoking remote method 'sessions:resume': Error: <msg>" → "<msg>".
-function ipcErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  return raw.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '')
 }
 
 // Pane ativa do layout salvo do dockview: activeGroup → o grupo na árvore do
@@ -260,15 +263,28 @@ const pendingEnds = new Map<
   }
 >()
 
+// "Encerrada pelo usuário" mora no handoff da filha (o main resolve se a sessão é
+// filha vinculada; se não for, é no-op). Gravada no clique, e não no kill, para o
+// quit dentro da janela de undo não ressuscitar a filha no boot. Falha não segura
+// o encerramento pedido: sem a marca, a mãe é avisada como se a filha tivesse
+// caído e o boot a retoma — o comportamento de antes desta marca.
+function markEndedByUser(sessionId: string, ended: boolean): void {
+  handoffsApi.setChildEnded({ sessionId, ended }).catch((err: unknown) => {
+    console.error('[sessions] falha ao gravar "encerrada pelo usuário":', err)
+  })
+}
+
 // A guarda do main re-anexa a PTY viva da conversa, inclusive uma que está na
 // janela de undo de um endSession: quem acabou de retomá-la a quer viva, então o
-// kill agendado (e o toast de desfazer, que não teria mais o que desfazer) caem.
+// kill agendado (e o toast de desfazer, que não teria mais o que desfazer) caem,
+// e com eles a marca de encerrada.
 function cancelPendingEnd(sessionId: string): void {
   const pending = pendingEnds.get(sessionId)
   if (!pending) return
   clearTimeout(pending.timer)
   pendingEnds.delete(sessionId)
   dismissToast(pending.toastId)
+  markEndedByUser(sessionId, false)
 }
 
 // Ids na janela de undo do Encerrar. O SessionStrip exclui esses do prune de
@@ -371,6 +387,9 @@ export function isHibernatedSession(sessionId: string): boolean {
 // sessions.id das PTYs que já saíram. O Terminal fecha a própria aba no pty:exit
 // (closePane): ali o aviso não pode dizer que a sessão segue rodando.
 const exitedSessionIds = new Set<string>()
+export function hasSessionExited(sessionId: string): boolean {
+  return exitedSessionIds.has(sessionId)
+}
 let offOom: (() => void) | null = null
 // Um wake em voo por paneId: ativação + clique + pedido do main ao mesmo tempo
 // resultam num único resume.
@@ -848,16 +867,20 @@ interface AppState {
   wakeDormantPane: (paneId: string) => Promise<string | null>
   // Alterna/define o display da pane (terminal ⇄ chat) e lembra por sessão.
   setPaneMode: (paneId: string, mode: PaneMode) => void
+  // O terminal da aba nascida em segundo plano montou: a marca já cumpriu o papel.
+  clearPaneBackground: (paneId: string) => void
   // Encerramento com undo: some da UI na hora, toast "Desfazer" por ~5s; o kill
   // efetivo da PTY só dispara quando a janela expira. `immediate: true` pula a
   // janela de undo e mata na hora (ex.: Reabrir uma sessão já exited — não há
-  // o que desfazer e o toast só confundiria).
-  endSession: (sessionId: string, opts?: { immediate?: boolean }) => void
+  // o que desfazer e o toast só confundiria). `linkedChild` só troca o texto do
+  // toast: a filha encerrada segue vinculada à mãe e retomável.
+  endSession: (sessionId: string, opts?: { immediate?: boolean; linkedChild?: boolean }) => void
   // Desfazer dentro da janela: cancela o kill agendado e restaura pane/chip.
   undoEndSession: (sessionId: string) => void
   // Clique simples na lista: foca a pane se já exibida; senão resume/abre (sem
   // destruir as panes existentes) e vai pra área de projetos.
-  focusOrOpenSession: (item: LiveSessionInfo) => Promise<void>
+  // background: cria a aba sem levar o usuário até ela (area e foco ficam como estão).
+  focusOrOpenSession: (item: LiveSessionInfo, opts?: { background?: boolean }) => Promise<void>
   // Multi-seleção: garante as N selecionadas em panes, substitui a view por
   // exatamente essas N e monta a grade (via gridRequest), indo pra projetos.
   openSessionsInGrid: (items: LiveSessionInfo[]) => Promise<void>
@@ -1178,6 +1201,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     writePaneMode(pane?.session.ccSessionId ?? null, mode)
   },
 
+  clearPaneBackground: (paneId) => {
+    set((s) => ({
+      panes: s.panes.map((p) => {
+        if (p.paneId !== paneId || !p.background) return p
+        const { background: _background, ...rest } = p
+        return rest
+      }),
+    }))
+  },
+
   wakeDormantPane: (paneId) => {
     const inflight = wakes.get(paneId)
     if (inflight) return inflight
@@ -1298,6 +1331,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       liveSessions: s.liveSessions.filter((x) => x.id !== sessionId),
     }))
     schedulePersist(get().panes)
+    // Só neste ramo (com Desfazer): o `immediate` é o Reabrir, que segue com a conversa.
+    markEndedByUser(sessionId, true)
     // Kill só depois do toast sumir (graça): ver comentário em END_KILL_GRACE_MS.
     const timer = setTimeout(() => {
       pendingEnds.delete(sessionId)
@@ -1308,7 +1343,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }, END_UNDO_MS + END_KILL_GRACE_MS)
     const name = live ? liveSessionLabel(live) : pane?.session.title
     const toastId = showToast({
-      title: 'Sessão encerrada',
+      title: opts?.linkedChild ? 'Filha encerrada · segue vinculada à mãe' : 'Sessão encerrada',
       body: name ?? undefined,
       actionLabel: 'Desfazer',
       onAction: () => get().undoEndSession(sessionId),
@@ -1327,6 +1362,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     clearTimeout(pending.timer)
     pendingEnds.delete(sessionId)
+    // Nada foi morto: desfazer não deixa marca.
+    markEndedByUser(sessionId, false)
     set((s) => ({
       // Não duplica se algo (ex: focusOrOpenSession) já recriou a pane no meio.
       panes:
@@ -1346,9 +1383,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     void get().refreshLiveSessions()
   },
 
-  focusOrOpenSession: async (item) => {
+  focusOrOpenSession: async (item, opts) => {
+    const background = opts?.background === true
     const existing = get().panes.find((p) => paneShowsLive(p, item))
     if (existing) {
+      if (background) return
       set({ focusPaneId: existing.paneId, area: 'projects' })
       if (existing.dormant) await get().wakeDormantPane(existing.paneId)
       return
@@ -1359,11 +1398,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Algo abriu a mesma conversa durante a adoção: foca a que entrou.
     const opened = get().panes.find((p) => paneShowsLive(p, item))
     if (opened) {
-      set({ focusPaneId: opened.paneId, area: 'projects' })
+      if (!background) set({ focusPaneId: opened.paneId, area: 'projects' })
       return
     }
-    const pane = paneFromLiveSession(item, paneId)
-    set((s) => ({ panes: [...s.panes, pane], area: 'projects', focusPaneId: paneId }))
+    const live = paneFromLiveSession(item, paneId)
+    const pane = background ? { ...live, background: true as const } : live
+    set((s) => ({
+      panes: [...s.panes, pane],
+      ...(background ? {} : { area: 'projects' as const, focusPaneId: paneId }),
+    }))
     schedulePersist(get().panes)
     void get().refreshLiveSessions()
   },
@@ -1675,8 +1718,12 @@ function onDormantBecameLive({ ccSessionId, session }: DormantBecameLiveEvent): 
 // no lugar (mesmo paneId), como uma restaurada dormindo, e entra no dormantSync
 // para o main conseguir acordá-la. O rascunho do Composer não migra: é 'pane:<paneId>'
 // no app.db, e o paneId é o mesmo dormindo e acordada.
-function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent): void {
+function onHibernated({ sessionId, ccSessionId, paneId, child }: SessionHibernatedEvent): void {
   hibernatedSessionIds.add(sessionId)
+  if (child) {
+    dropSleepingChildPane(sessionId)
+    return
+  }
   const { panes } = useAppStore.getState()
   if (!panes.some((p) => !p.dormant && p.session.id === sessionId)) {
     addHibernatedPane(sessionId, ccSessionId, paneId)
@@ -1700,6 +1747,23 @@ function onHibernated({ sessionId, ccSessionId, paneId }: SessionHibernatedEvent
     }),
   })
   schedulePersist(useAppStore.getState().panes)
+}
+
+// Filha de handoff concluído: dorme sem aba e segue vinculada (quem a acorda é o
+// card dela ou a mãe). A pane, se houver, sai sem passar pelo closePane: aquele é
+// o "fechar aba" do usuário, que avisa o main e cancelaria a hibernação.
+function dropSleepingChildPane(sessionId: string): void {
+  const { panes, liveSessions } = useAppStore.getState()
+  const pane = panes.find((p) => !p.dormant && p.session.id === sessionId)
+  const live = liveSessions.find((s) => s.id === sessionId)
+  if (pane) {
+    useAppStore.setState({ panes: panes.filter((p) => p.paneId !== pane.paneId) })
+    schedulePersist(useAppStore.getState().panes)
+  }
+  showToast({
+    title: 'Filha dormindo · segue vinculada',
+    body: pane?.session.title ?? (live ? liveSessionLabel(live) : undefined),
+  })
 }
 
 // A aba confirmada antes do /exit sumiu até o exit (fechada nessa janela): sem
@@ -1734,11 +1798,14 @@ function addHibernatedPane(sessionId: string, ccSessionId: string, paneId: strin
 function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
   const { panes, area } = useAppStore.getState()
   const pane = panes.find((p) => !p.dormant && p.session.id === sessionId)
+  // Janela do mapa, coluna da mãe e Room mostram a PTY fora da aba: o usuário
+  // está nela mesmo sem pane (filha em segundo plano) ou com a pane fora de foco.
+  const hosted = useTerminalLease.getState().leases[sessionId] !== undefined
   if (!pane) {
     void sessionsApi.paneCheckResult({
       requestId,
       paneId: null,
-      focused: false,
+      focused: hosted,
       composerHasText: false,
       composerFocused: false,
     })
@@ -1750,7 +1817,7 @@ function answerPaneCheck({ requestId, sessionId }: PaneCheckRequest): void {
     paneId: pane.paneId,
     ...activity,
     // Fora da área de projetos a aba ativa do dockview não está à vista.
-    focused: activity.focused && area === 'projects',
+    focused: hosted || (activity.focused && area === 'projects'),
   })
 }
 

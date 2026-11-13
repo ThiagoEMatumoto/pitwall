@@ -3,6 +3,7 @@ import Database from 'better-sqlite3'
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import { runMigrations } from './migrations/index'
+import { sweepInFlightHandoffs } from './handoff/boot-sweep'
 
 let dbInstance: Database.Database | null = null
 let interruptedAtOpen: ReadonlySet<string> = new Set()
@@ -40,26 +41,7 @@ export function getDb(): Database.Database {
     Date.now(),
   )
 
-  // Handoffs vivos (running OU needs_input) de um boot anterior também são órfãos:
-  // a sessão-filha (PTY) não sobrevive ao restart, e a reconciliação via evento
-  // PTY exit nunca dispara (o ptyManager morreu junto). Sem isto, órfãos travam
-  // o dedup do repo-alvo para sempre. No boot TODO in-flight é órfão — nenhum
-  // PTY-filho sobrevive ao restart (inclui needs_input: a filha que perguntou
-  // também morreu junto com o app). Marca 'interrupted' (RECUPERÁVEL, não
-  // 'failed'): app-restart não é erro de tarefa; o handoff sai do ativo (libera
-  // o dedup) mas fica retomável pelo humano. Mantém em sync com failIfRunning /
-  // reconcileStuck (mesma transição em → interrupted).
-  //
-  // Quem estava em voo é lido ANTES do UPDATE: o lazy restore sobe eager a mãe e a
-  // filha desses handoffs, e depois do sweep eles são indistinguíveis de um
-  // 'interrupted' antigo (que não deve acordar nada no boot).
-  const inFlight = db
-    .prepare("SELECT id FROM handoffs WHERE status IN ('running','needs_input')")
-    .all() as Array<{ id: string }>
-  interruptedAtOpen = new Set(inFlight.map((r) => r.id))
-  db.prepare(
-    "UPDATE handoffs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('running','needs_input')",
-  ).run('Sessão-filha órfã: app reiniciou sem reconciliar o handoff', Date.now())
+  interruptedAtOpen = new Set(sweepInFlightHandoffs(db))
 
   dbInstance = db
   return db

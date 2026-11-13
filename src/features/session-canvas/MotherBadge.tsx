@@ -1,7 +1,7 @@
 import { useStore } from '@xyflow/react'
 import { Crown, Flag } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
-import { useAppStore } from '@/store/appStore'
+import { endSessionAsked } from '@/features/handoffs/end-child'
 import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import { batonChipPx, motherBadgePx, motherBadgeText } from './mother-badge'
 import { quantizeZoom } from './card-display'
@@ -49,7 +49,6 @@ export function BatonPassedChip({
   compact?: boolean
 }) {
   const zoom = useZoom()
-  const endSession = useAppStore((s) => s.endSession)
   if (!node.batonPassed || node.status === 'ended') return null
   const fontSize = batonChipPx(zoom)
   return (
@@ -65,7 +64,7 @@ export function BatonPassedChip({
         data-testid="card-baton-end"
         onClick={(e) => {
           e.stopPropagation()
-          endSession(node.sessionId)
+          endSessionAsked(node.sessionId)
         }}
         className="nodrag rounded border border-[var(--color-border)] px-1 text-[var(--color-text-dim)] transition hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
       >

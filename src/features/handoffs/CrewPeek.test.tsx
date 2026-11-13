@@ -1,5 +1,5 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Handoff, LiveSessionInfo } from '../../../shared/types/ipc'
 
 // O peek renderiza o ChatView, que puxa transcript por IPC — aqui só interessa a
@@ -41,6 +41,9 @@ import { useAttentionListStore } from '@/store/attentionStore'
 import { projectAttention } from '../../../shared/attention/project-attention'
 import { useTerminalLease } from '@/features/sessions/terminal-lease'
 import { useProjectsViewStore } from '@/features/session-canvas/projects-view-store'
+import { useSessionGraphStore } from '@/features/sessions/session-graph-store'
+import { handoffsApi } from '@/lib/ipc'
+import type { SessionGraphNode } from '../../../shared/types/session-graph'
 import {
   defaultLiftSize,
   readLiftSizes,
@@ -72,6 +75,9 @@ const handoff: Handoff = {
   outcome: null,
   dismissedAt: null,
   resumable: false,
+  predecessorSessionId: null,
+  endedByUserAt: null,
+  childAsleep: false,
 }
 
 const live: LiveSessionInfo = {
@@ -94,6 +100,36 @@ function mount(patch: Partial<Handoff> = {}, liveStatus: LiveSessionInfo['status
   useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
   return render(<CrewPeek />)
 }
+
+// Sem processo o selo do header caía em "filha encerrou", em vermelho: para a
+// concluída que hibernou isso lia como queda.
+describe('CrewPeek — filha concluída dormindo', () => {
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    useAppStore.setState({ panes: [] })
+  })
+
+  it('o selo diz "dormindo", não "filha encerrou"', () => {
+    useHandoffsStore.setState({
+      handoffs: [{ ...handoff, status: 'done', childAsleep: true, summary: 'entregue' }],
+    })
+    useAppStore.setState({ liveSessions: [] })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(screen.getByText('dormindo')).toBeTruthy()
+    expect(screen.queryByText('filha encerrou')).toBeNull()
+  })
+
+  it('concluída sem a marca de hibernação segue como antes', () => {
+    useHandoffsStore.setState({ handoffs: [{ ...handoff, status: 'done', summary: 'entregue' }] })
+    useAppStore.setState({ liveSessions: [] })
+    useCrewDockStore.setState({ peekTarget: { kind: 'handoff', id: 'h1' }, peekId: 'h1' })
+    render(<CrewPeek />)
+
+    expect(screen.getByText('filha encerrou')).toBeTruthy()
+  })
+})
 
 describe('CrewPeek — responder o menu da filha sem entrar nela', () => {
   beforeEach(() => {
@@ -688,5 +724,92 @@ describe('CrewPeek como lift do mapa', () => {
     fireEvent.click(screen.getByLabelText('Fechar'))
     expect(useCrewDockStore.getState().peekTarget).toBeNull()
     expect(useProjectsViewStore.getState().view).toBe('map')
+  })
+})
+
+// Decisão do usuário: a mensagem que ele manda a uma filha fora da tela abre a aba
+// dela ANTES do envio. O quick look é modal, então a aba nasce em segundo plano e
+// ele só é levado até ela com o envio aceito (o erro fica onde ele digitou).
+describe('CrewPeek — mensagem do usuário abre a aba da filha', () => {
+  const sendMessage = vi.mocked(handoffsApi.sendMessage)
+  const focusOrOpenSession = vi.fn()
+
+  // "É filha" é o hierarchyMotherId do grafo (escrito no main por session-graph.ts,
+  // a partir de readHierarchyLinks): os dois campos que a régua do renderer lê.
+  function linkAsChild() {
+    useSessionGraphStore.setState({
+      graph: {
+        nodes: [
+          { sessionId: 's-child', hierarchyMotherId: 'm1' },
+          { sessionId: 'm1', hierarchyMotherId: null },
+        ] as unknown as SessionGraphNode[],
+        lanes: [],
+        edges: [],
+      },
+    })
+  }
+
+  function typeAndSend(text: string) {
+    const field = screen.getByPlaceholderText('Enviar mensagem para a filha…')
+    fireEvent.change(field, { target: { value: text } })
+    fireEvent.click(screen.getByTitle('Enviar (Enter)'))
+    return field
+  }
+
+  beforeEach(() => {
+    useCrewDockStore.setState({ peekTarget: null, peekId: null, peekMode: 'chat' })
+    sendMessage.mockReset().mockResolvedValue(undefined)
+    focusOrOpenSession.mockReset().mockResolvedValue(undefined)
+    useAppStore.setState({ panes: [], focusOrOpenSession })
+    linkAsChild()
+  })
+  afterEach(() => {
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+  })
+
+  it('filha sem aba: a aba abre antes do envio e, aceito, o peek dá lugar a ela', async () => {
+    mount()
+    typeAndSend('segue por aqui')
+
+    await waitFor(() => expect(useCrewDockStore.getState().peekId).toBeNull())
+    expect(sendMessage).toHaveBeenCalledWith({ id: 'h1', text: 'segue por aqui' })
+    expect(focusOrOpenSession).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ id: 's-child' }),
+      { background: true },
+    )
+    expect(focusOrOpenSession.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessage.mock.invocationCallOrder[0],
+    )
+    // Aceito: agora sim navega (o mesmo "abrir como aba" do rodapé).
+    expect(focusOrOpenSession).toHaveBeenCalledTimes(2)
+    expect(focusOrOpenSession.mock.calls[1]).toEqual([expect.objectContaining({ id: 's-child' })])
+  })
+
+  it('envio recusado: a aba já abriu, e o peek fica com o erro e o texto', async () => {
+    // Como a recusa chega do ipcRenderer.invoke: prefixo do canal + erro do main.
+    const reason = 'A sessão-filha não está mais viva — não há para onde enviar.'
+    sendMessage.mockRejectedValue(
+      new Error(`Error invoking remote method 'handoffs:send-message': Error: ${reason}`),
+    )
+    mount()
+    const field = typeAndSend('segue por aqui')
+
+    expect(await screen.findByText(reason)).toBeInTheDocument()
+    expect(field).toHaveValue('segue por aqui')
+    expect(useCrewDockStore.getState().peekId).toBe('h1')
+    expect(focusOrOpenSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('filha que já tem aba: envia sem abrir nada e o peek continua aberto', async () => {
+    useAppStore.setState({
+      panes: [{ paneId: 'p1', session: { ccSessionId: 'cc-child' } }] as never,
+    })
+    mount()
+    typeAndSend('segue por aqui')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalled())
+    expect(focusOrOpenSession).not.toHaveBeenCalled()
+    expect(useCrewDockStore.getState().peekId).toBe('h1')
   })
 })

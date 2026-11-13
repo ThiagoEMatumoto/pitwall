@@ -2,9 +2,11 @@ import { useState, type ReactNode } from 'react'
 import { Clock, CornerDownLeft, ShieldAlert } from 'lucide-react'
 import { Icon } from '@/components/ui/Icon'
 import { handoffsApi, sendToApi } from '@/lib/ipc'
+import { ipcErrorMessage } from '@/lib/ipc-error'
 import { useAppStore } from '@/store/appStore'
 import { useHandoffsStore } from '@/store/handoffsStore'
 import { dockCrew } from '@/features/handoffs/crew'
+import { revealChildOnUserMessage } from '@/features/handoffs/reveal-child'
 import {
   AttentionMenuPanel,
   isActionableDetail,
@@ -214,6 +216,8 @@ export function CardPromptBar({
     setSending(true)
     setNotice(null)
     try {
+      // Pelo mapa a aba da filha nasce em segundo plano: quem escreve fica no cartão.
+      await revealChildOnUserMessage(node.sessionId, { focus: false })
       if (crewHandoffId) {
         await handoffsApi.sendMessage({ id: crewHandoffId, text: body })
         setText('')
@@ -225,7 +229,7 @@ export function CardPromptBar({
       if (res.ok) setText('')
       setNotice(resultNotice(res, target))
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : 'Não deu pra enviar — tente de novo.')
+      setNotice(err instanceof Error ? ipcErrorMessage(err) : 'Não deu pra enviar — tente de novo.')
     } finally {
       setSending(false)
     }

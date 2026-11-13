@@ -4,6 +4,9 @@
 // recusa conta por motivo — os contadores são a única forma de alguém notar um
 // gate que recusa tudo.
 //
+// A filha de handoff concluído (done) tem janela própria e dispensa a pane: sai
+// com o mesmo /exit, fica sem aba e segue vinculada ao handoff.
+//
 // O /exit sai pela PromptQueue com when 'on-idle', a mesma guarda de toda entrega
 // (sem menu, sem rascunho, tela reconhecida). Nunca Ctrl-U, nunca limpar input,
 // nunca kill: se não sair, a sessão fica viva.
@@ -13,13 +16,15 @@ import type { SendPromptInput, SendPromptResult } from '../../../../shared/types
 import {
   HIBERNATE_REFUSALS,
   paneCheckRefusal,
+  type HandoffChildKind,
   type HibernateRefusal,
   type PaneCheck,
   type HibernateStats,
   type SessionHibernatedEvent,
 } from '../../../../shared/hibernate'
+import { perfCount, perfSelfTime, type PerfWait } from '../perf-probe'
 import type { ProcTreeVerdict } from './proc-tree'
-import type { TranscriptVerdict } from './schedule-scan'
+import type { TranscriptPeek } from './schedule-scan'
 
 export const HIBERNATE_TICK_MS = 60_000
 // O marcador cai aqui: um exit depois disso é um exit comum (o claude que não saiu
@@ -51,6 +56,9 @@ export interface IdleHibernatorDeps {
   lazyRestore(): boolean
   // Minutos da pref; <= 0 = desligado.
   afterMin(): number
+  // Minutos da janela da filha de handoff concluído; <= 0 = desligado. Não
+  // depende do lazyRestore: ela não vira dormant.
+  childAfterMin(): number
   // PTYs vivas do provider claude com ccSessionId.
   candidates(): HibernateCandidate[]
   // Pane (aba) acordada no renderer para esta conversa, pelo open_panes salvo
@@ -73,14 +81,13 @@ export interface IdleHibernatorDeps {
   // sessions.id da PTY viva desta conversa (findAliveByCc), ou null.
   aliveSessionId(ccSessionId: string): string | null
   activeHandoffCcSessionIds(): string[]
-  // Filha de handoff em QUALQUER status (inclusive done/failed). Uma filha
-  // terminada acordaria pelo resume genérico, sem o relink que devolve alias,
-  // permissão e --settings, no checkout que a posse reservou para ela.
-  isHandoffChild(ccSessionId: string): boolean
+  // 'done' hiberna pela janela da filha. 'other' (falhou, parou) nunca hiberna:
+  // o exit dela é o que o handoff ainda espera para se resolver.
+  handoffChildKind(ccSessionId: string): HandoffChildKind
   queueHas(sessionId: string): boolean
   transcriptPath(ccSessionId: string): string | null
-  // null = transcript ilegível.
-  scanTranscript(path: string): Promise<TranscriptVerdict | null>
+  // null = transcript ilegível. 'reading' = ainda sendo lido, fora do tick.
+  scanTranscript(path: string): Promise<TranscriptPeek | null>
   procTree(pid: number): ProcTreeVerdict
   send(input: SendPromptInput): Promise<SendPromptResult>
   cancel(queueId: string): void
@@ -104,6 +111,8 @@ function emptyRefusals(): Record<HibernateRefusal, number> {
 interface Pending {
   ccSessionId: string
   paneId: string | null
+  // Filha de handoff concluído: o exit não deixa pane dormant.
+  child: boolean
   // A fila escreveu o /exit. Daqui até o exit, todo write do app é segurado.
   delivered: boolean
   // O usuário escreveu no PTY antes de o /exit sair: a caixa pode ter texto cujo
@@ -120,6 +129,7 @@ interface Pending {
 export class IdleHibernator {
   private stats: HibernateStats = {
     afterMin: 0,
+    childAfterMin: 0,
     hibernated: 0,
     refused: emptyRefusals(),
     lastTickAt: null,
@@ -188,17 +198,44 @@ export class IdleHibernator {
     return afterMin > 0 ? afterMin : 0
   }
 
-  // Liga o tick só com lazyRestore E afterMin > 0. Chamado no boot e quando
-  // qualquer uma das duas prefs muda.
-  reschedule(): void {
+  private effectiveChildAfterMin(): number {
+    const childAfterMin = this.deps.childAfterMin()
+    return childAfterMin > 0 ? childAfterMin : 0
+  }
+
+  // As duas janelas, já gravadas nos contadores. on = alguma está ligada.
+  private windows(): { afterMin: number; childAfterMin: number; on: boolean } {
     const afterMin = this.effectiveAfterMin()
+    const childAfterMin = this.effectiveChildAfterMin()
     this.stats.afterMin = afterMin
-    if (afterMin > 0 && !this.timer) {
-      this.timer = setInterval(() => void this.tick(), this.deps.tickMs ?? HIBERNATE_TICK_MS)
+    this.stats.childAfterMin = childAfterMin
+    return { afterMin, childAfterMin, on: afterMin > 0 || childAfterMin > 0 }
+  }
+
+  // Liga o tick com a hibernação geral (lazyRestore E afterMin > 0) ou com a
+  // janela da filha concluída. Chamado no boot e quando qualquer uma das três
+  // prefs muda.
+  reschedule(): void {
+    const { on } = this.windows()
+    if (on && !this.timer) {
+      this.timer = setInterval(
+        () => void this.scheduledTick(),
+        this.deps.tickMs ?? HIBERNATE_TICK_MS,
+      )
       this.timer.unref?.()
-    } else if (afterMin <= 0 && this.timer) {
+    } else if (!on && this.timer) {
       clearInterval(this.timer)
       this.timer = null
+    }
+  }
+
+  // No timer ninguém trata a rejeição: um dep que lança (banco fechando no quit)
+  // vira aviso, e o próximo tick tenta de novo.
+  private async scheduledTick(): Promise<void> {
+    try {
+      await this.tick()
+    } catch (err) {
+      this.deps.warn({ event: 'hibernate_tick_failed', error: String(err) })
     }
   }
 
@@ -221,45 +258,65 @@ export class IdleHibernator {
   }
 
   async tick(): Promise<void> {
-    const afterMin = this.effectiveAfterMin()
-    this.stats.afterMin = afterMin
-    if (afterMin <= 0 || this.ticking) return
+    const { afterMin, childAfterMin, on } = this.windows()
+    if (!on || this.ticking) return
     this.ticking = true
     try {
-      this.stats.lastTickAt = this.now()
-      const handoffCc = new Set(this.deps.activeHandoffCcSessionIds())
-      for (const candidate of this.deps.candidates()) {
-        if (this.pending.has(candidate.sessionId)) continue
-        const verdict = await this.evaluate(candidate, afterMin * 60_000, handoffCc)
-        if (!verdict.ok) {
-          this.refuse(verdict.reason)
-          continue
-        }
-        // O open_panes tem debounce: a aba pode ter fechado depois do último save.
-        // E a aba focada, ou com o Composer em uso, nunca hiberna.
-        const check = await this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId)
-        const refusal = paneCheckRefusal(check)
-        if (refusal) {
-          this.refuse(refusal)
-          continue
-        }
-        await this.hibernate(candidate, check?.paneId ?? null)
-      }
+      // Com CM_PERF=1 spans['hibernate.tick'] da sonda é só o gate. O que o tick
+      // passa esperando tem span próprio: a resposta do renderer em
+      // 'hibernate.confirm' e o /exit pela fila em 'hibernate.exit'.
+      await perfSelfTime('hibernate.tick', (wait) => this.sweep(afterMin, childAfterMin, wait))
     } finally {
       this.ticking = false
     }
   }
 
+  private async sweep(afterMin: number, childAfterMin: number, wait: PerfWait): Promise<void> {
+    this.stats.lastTickAt = this.now()
+    const handoffCc = new Set(this.deps.activeHandoffCcSessionIds())
+    for (const candidate of this.deps.candidates()) {
+      if (this.pending.has(candidate.sessionId)) continue
+      const doneChild =
+        childAfterMin > 0 && this.deps.handoffChildKind(candidate.ccSessionId) === 'done'
+      const windowMin = doneChild ? childAfterMin : afterMin
+      // Hibernação geral desligada: só a filha concluída é avaliada. O gate lê o
+      // transcript inteiro, e isso não pode rodar para toda sessão viva.
+      if (windowMin <= 0) continue
+      perfCount('hibernate.evaluated')
+      const verdict = await this.evaluate(candidate, windowMin * 60_000, handoffCc, doneChild)
+      if (!verdict.ok) {
+        this.refuse(verdict.reason)
+        continue
+      }
+      // O open_panes tem debounce: a aba pode ter fechado depois do último save.
+      // E a aba focada, ou com o Composer em uso, nunca hiberna.
+      const check = await wait('hibernate.confirm', () =>
+        this.deps.confirmPane(candidate.sessionId, candidate.ccSessionId),
+      )
+      const refusal = paneCheckRefusal(check, doneChild)
+      if (refusal) {
+        this.refuse(refusal)
+        continue
+      }
+      await wait('hibernate.exit', () =>
+        this.hibernate(candidate, doneChild ? null : (check?.paneId ?? null), doneChild),
+      )
+    }
+  }
+
   // Gates H2 a-f, dos baratos para os caros. O primeiro que falha decide o motivo.
+  // doneChild = filha de handoff concluído avaliada pela janela dela: dispensa a
+  // pane (a) e passa pelo gate de filha (d).
   async evaluate(
     c: HibernateCandidate,
     windowMs: number,
     handoffCc: Set<string>,
+    doneChild = false,
   ): Promise<GateVerdict> {
     const now = this.now()
     const refuse = (reason: HibernateRefusal): GateVerdict => ({ ok: false, reason })
     // a) pane acordada: sem ela a sessão não teria onde virar dormant.
-    if (!this.deps.hasPane(c.ccSessionId)) return refuse('no-pane')
+    if (!doneChild && !this.deps.hasPane(c.ccSessionId)) return refuse('no-pane')
     // b) I/O no PTY (saída, escrita ou resize do app).
     const io = this.deps.lastIoAt(c.sessionId)
     if (io === null || now - io < windowMs) return refuse('io-recent')
@@ -272,9 +329,12 @@ export class IdleHibernator {
     if (file.statusUpdatedAt === null || now - file.statusUpdatedAt < windowMs) {
       return refuse('status-recent')
     }
-    // d) handoff ativo (mãe ou filha), filha de handoff já encerrada e fila de prompts.
+    // d) handoff ativo (mãe ou filha), filha de handoff avaliada fora da janela
+    // dela (falhou, parou, ou a janela está desligada) e fila de prompts.
     if (handoffCc.has(c.ccSessionId)) return refuse('handoff')
-    if (this.deps.isHandoffChild(c.ccSessionId)) return refuse('handoff-child')
+    if (!doneChild && this.deps.handoffChildKind(c.ccSessionId) !== 'none') {
+      return refuse('handoff-child')
+    }
     if (this.deps.queueHas(c.sessionId)) return refuse('queue')
     // e) agendamento em qualquer ponto do transcript, ou trabalho em background
     // que o status 'idle' não conta (Monitor, teammate, task MCP) ainda aberto.
@@ -282,6 +342,7 @@ export class IdleHibernator {
     if (!path) return refuse('no-transcript')
     const transcript = await this.deps.scanTranscript(path)
     if (transcript === null) return refuse('no-transcript')
+    if (transcript === 'reading') return refuse('transcript-reading')
     if (transcript !== 'clear') return refuse(transcript)
     // f) nada rodando embaixo do claude.
     const tree = this.deps.procTree(file.pid)
@@ -291,10 +352,15 @@ export class IdleHibernator {
 
   // H3: /exit pela fila on-idle, com a guarda dela. Só conta como em curso
   // se a fila escreveu agora; segurado/enfileirado/recusado = cancela e não hiberna.
-  async hibernate(c: HibernateCandidate, paneId: string | null = null): Promise<boolean> {
+  async hibernate(
+    c: HibernateCandidate,
+    paneId: string | null = null,
+    child = false,
+  ): Promise<boolean> {
     const pending: Pending = {
       ccSessionId: c.ccSessionId,
       paneId,
+      child,
       delivered: false,
       inputSeen: false,
       held: '',
@@ -395,19 +461,23 @@ export class IdleHibernator {
   }
 
   // A aba foi fechada pelo X com o /exit em curso: quem fechou não quer a pane de
-  // volta, então o exit que vier é comum (sem dormant, sem contar hibernação).
+  // volta, então o exit que vier é comum (sem dormant, sem contar hibernação). A
+  // filha concluída não depende da pane: segue hibernando.
   onPaneClosed(sessionId: string): void {
     const pending = this.pending.get(sessionId)
-    if (!pending) return
+    if (!pending || pending.child) return
     this.forget(sessionId, pending)
     if (pending.delivered) this.unpersist(sessionId)
     this.deps.warn({ event: 'hibernate_cancelled_by_close', sessionId })
   }
 
-  // O exit desta PTY é (ou acabou de ser) o da hibernação. Vale antes e depois
-  // de onExit, para os ouvintes do exit não dependerem da ordem de registro.
+  // O exit desta PTY é (ou acabou de ser) o de uma hibernação que deixa pane
+  // dormant para acordar. Vale antes e depois de onExit, para os ouvintes do exit
+  // não dependerem da ordem de registro. A filha concluída dorme sem pane: para a
+  // fila o exit dela é comum, e os itens esperam a conversa voltar.
   wasHibernatedExit(sessionId: string): boolean {
-    return this.pending.has(sessionId) || this.recentExits.has(sessionId)
+    const pending = this.pending.get(sessionId)
+    return pending ? !pending.child : this.recentExits.has(sessionId)
   }
 
   // Exit de PTY: se era o /exit da hibernação, devolve o evento que o renderer
@@ -417,18 +487,22 @@ export class IdleHibernator {
     const pending = this.pending.get(sessionId)
     if (!pending) return null
     this.forget(sessionId, pending)
-    const recent = setTimeout(() => this.recentExits.delete(sessionId), RECENT_EXIT_MS)
-    recent.unref?.()
-    this.recentExits.set(sessionId, recent)
+    if (!pending.child) {
+      const recent = setTimeout(() => this.recentExits.delete(sessionId), RECENT_EXIT_MS)
+      recent.unref?.()
+      this.recentExits.set(sessionId, recent)
+    }
     if (pending.paneId) this.deps.registerDormant(pending.ccSessionId, pending.paneId)
     this.stats.hibernated++
     this.deps.warn({
       event: 'session_hibernated',
       sessionId,
       ccSessionId: pending.ccSessionId,
+      child: pending.child,
       total: this.stats.hibernated,
     })
-    return { sessionId, ccSessionId: pending.ccSessionId, paneId: pending.paneId }
+    const event = { sessionId, ccSessionId: pending.ccSessionId, paneId: pending.paneId }
+    return pending.child ? { ...event, child: true } : event
   }
 
   private refuse(reason: HibernateRefusal): void {

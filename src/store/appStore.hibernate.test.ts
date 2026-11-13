@@ -13,7 +13,12 @@ const calls = {
   paneCheck: [] as { requestId: string; paneId: string | null }[],
   paneClosed: [] as string[],
 }
-type HibernatedEvent = { sessionId: string; ccSessionId: string; paneId: string | null }
+type HibernatedEvent = {
+  sessionId: string
+  ccSessionId: string
+  paneId: string | null
+  child?: true
+}
 let hibernatedHandler: ((e: HibernatedEvent) => void) | null = null
 let paneCheckHandler:
   ((r: { requestId: string; sessionId: string; ccSessionId: string }) => void) | null = null
@@ -87,6 +92,7 @@ Object.assign(window, {
 const { useAppStore, isHibernatedSession } = await import('./appStore')
 const { exitAction } = await import('@/features/sessions/hibernate-exit')
 const { useToastStore } = await import('@/features/notifications/toast-store')
+const { useTerminalLease } = await import('@/features/sessions/terminal-lease')
 type ActivePane = import('./appStore').ActivePane
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -240,6 +246,48 @@ describe('sessions:hibernated', () => {
   })
 })
 
+// Filha de handoff concluído: dorme sem aba e segue vinculada ao handoff. Nada de
+// pane dormant; o que a acorda é o card dela ou a mãe.
+describe('sessions:hibernated de filha de handoff concluído', () => {
+  const childEvent = (sessionId: string, cc: string): HibernatedEvent => ({
+    sessionId,
+    ccSessionId: cc,
+    paneId: null,
+    child: true,
+  })
+
+  it('com aba: a pane sai em vez de virar dormant, e um aviso diz que ela dormiu', async () => {
+    hibernatedHandler!(childEvent('sess-a', 'cc-a'))
+    emitExit('sess-a')
+    await flush()
+
+    expect(useAppStore.getState().panes.map((p) => p.paneId)).toEqual(['pane-b'])
+    expect(useToastStore.getState().toasts).toMatchObject([
+      { title: 'Filha dormindo · segue vinculada', body: 'deploy infra' },
+    ])
+    // Não é o "fechar aba" do usuário: sem Desfazer, e o main não é avisado (o
+    // aviso cancelaria a hibernação em curso).
+    expect(useToastStore.getState().toasts[0].actionLabel).toBeUndefined()
+    expect(calls.paneClosed).toEqual([])
+    // O Terminal de outro host (janela do mapa) só fecha, sem "Sessão encerrada".
+    expect(isHibernatedSession('sess-a')).toBe(true)
+    expect(exitAction('sess-a', 'modal')).toBe('close')
+  })
+
+  it('sem aba: nenhuma pane nasce', async () => {
+    hibernatedHandler!(childEvent('sess-bg', 'cc-bg'))
+    emitExit('sess-bg')
+    await flush()
+
+    const panes = useAppStore.getState().panes
+    expect(panes.map((p) => p.paneId)).toEqual(['pane-a', 'pane-b'])
+    expect(panes.some((p) => p.dormant)).toBe(false)
+    expect(useToastStore.getState().toasts.map((t) => t.title)).toEqual([
+      'Filha dormindo · segue vinculada',
+    ])
+  })
+})
+
 // Fechar pelo X avisa o main: um /exit da hibernação em curso vira exit comum em
 // vez de recriar a aba que o usuário acabou de fechar.
 describe('closePane avisa o main', () => {
@@ -283,6 +331,24 @@ describe('sessions:pane-check-request (confirmação antes do /exit)', () => {
         composerFocused: false,
       },
     ])
+  })
+
+  // Janela do mapa, coluna da mãe e Room mostram a PTY sem passar pela aba.
+  it('aberta fora de aba → focused, com ou sem pane', () => {
+    const lease = useTerminalLease.getState()
+    lease.acquire('sess-x', 'modal')
+    lease.acquire('sess-b', 'modal')
+    try {
+      paneCheckHandler!({ requestId: 'r4', sessionId: 'sess-x', ccSessionId: 'cc-x' })
+      paneCheckHandler!({ requestId: 'r5', sessionId: 'sess-b', ccSessionId: 'cc-b' })
+      expect(calls.paneCheck).toMatchObject([
+        { requestId: 'r4', paneId: null, focused: true },
+        { requestId: 'r5', paneId: 'pane-b', focused: true },
+      ])
+    } finally {
+      lease.release('sess-x', 'modal')
+      lease.release('sess-b', 'modal')
+    }
   })
 
   it('sem aba (fechada) ou já dormindo → null', () => {

@@ -60,8 +60,10 @@ vi.mock('../services/session-activity', () => ({
   setPromptQueueTurnHook: () => {},
 }))
 
-import { promptQueue, sendWakingDormant, wakeParkedTargets } from './send-prompt'
+import { promptQueue, sendFromUser, sendWakingDormant, wakeParkedTargets } from './send-prompt'
 import { DormantPanes, setDormantPanes } from '../services/dormant-panes'
+import { onSessionLinkPulse } from '../services/session-link-pulse'
+import type { SessionLinkPulse } from '../../../shared/types/session-link-pulse'
 
 const CODEX = 'codex-pty'
 
@@ -218,5 +220,65 @@ describe('sessions:send-prompt — destino dormindo (lazy restore)', () => {
     expect(res).toEqual({ ok: false, error: 'not-running' })
     expect(requests).toEqual([])
     expect(seam.writes).toEqual([])
+  })
+})
+
+// O pulso mãe→filha marca a filha em segundo plano como "não lida". O @alias
+// digitado pelo usuário na pane da mãe sai com a mãe como origem: sem dizer quem
+// escreveu, a mensagem dele mesmo viraria aviso.
+describe('sessions:send-prompt — quem escreveu a mensagem', () => {
+  function listening(): { heard: SessionLinkPulse[]; off: () => void } {
+    const heard: SessionLinkPulse[] = []
+    return { heard, off: onSessionLinkPulse((p) => heard.push(p)) }
+  }
+
+  it('envio da UI a partir da pane da mãe sai no pulso como do usuário', async () => {
+    seam.tracked.clear()
+    const { heard, off } = listening()
+
+    const res = await sendFromUser({
+      sessionId: 'filha-pty',
+      text: 'segue',
+      when: 'now',
+      fromSessionId: 'mae-pty',
+    })
+    off()
+
+    expect(res).toEqual({ ok: true, delivered: true })
+    expect(heard).toMatchObject([
+      { fromSessionId: 'mae-pty', toSessionId: 'filha-pty', kind: 'message', by: 'human' },
+    ])
+  })
+
+  it('a UI não escolhe a autoria: o que vier no payload é descartado', async () => {
+    seam.tracked.clear()
+    const { heard, off } = listening()
+
+    await sendFromUser({
+      sessionId: 'filha-pty-2',
+      text: 'segue',
+      when: 'now',
+      fromSessionId: 'mae-pty-2',
+      by: 'agent',
+    })
+    off()
+
+    expect(heard.map((p) => p.by)).toEqual(['human'])
+  })
+
+  it('o que o main enfileira por conta própria sai sem autoria', async () => {
+    seam.tracked.clear()
+    const { heard, off } = listening()
+
+    await promptQueue.send({
+      sessionId: 'filha-pty-3',
+      text: 'nota da mãe',
+      when: 'now',
+      fromSessionId: 'mae-pty-3',
+    })
+    off()
+
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).not.toHaveProperty('by')
   })
 })

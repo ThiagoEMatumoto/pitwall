@@ -11,6 +11,8 @@ import { waitReady } from "../driver/nav";
 // estado terminal, então o dock viria vazio e nada seria exercido.
 //
 // (1) dispensa: o "×" no card e Delete no dock removem em um gesto, com Desfazer.
+//     Desde o "Arquivar card" os dois só existem com o processo da filha morto:
+//     com as filhas semeadas vivas, esta parte registra a ausência do "×".
 // (2) atlas: abrir o peek em modo terminal monta um Terminal novo. Antes do fix
 //     isso limpava a textura compartilhada e corrompia as OUTRAS panes. Comparamos
 //     o canvas das panes de fundo antes/depois — elas não recebem input nenhum,
@@ -89,7 +91,7 @@ async function dockState() {
       ids: cards.map((c) => c.getAttribute("data-crew-card") || "?"),
       // botão de dispensar DENTRO de um card (exclui os "×" dos toasts)
       dismissBtns: cards.filter((c) =>
-        c.querySelector('[aria-label="Dispensar"]'),
+        c.querySelector('[aria-label="Arquivar card"]'),
       ).length,
       texts: cards.map((c) => (c.textContent || "").trim().slice(0, 40)),
     };
@@ -122,7 +124,7 @@ try {
     // 1a) botão "×" dispensa em um clique
     const firstId = dock.ids[0];
     const btn = page
-      .locator(`[data-crew-card="${firstId}"] [aria-label="Dispensar"]`)
+      .locator(`[data-crew-card="${firstId}"] [aria-label="Arquivar card"]`)
       .first();
     const hasBtn = (await btn.count()) > 0;
     console.log(`\nbotão "×" presente no card: ${hasBtn}`);

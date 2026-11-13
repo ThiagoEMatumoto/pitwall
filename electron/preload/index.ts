@@ -428,6 +428,8 @@ const api: Api = {
     dismiss: (id: string) => invoke('handoffs:dismiss', id),
     undismiss: (id: string) => invoke('handoffs:undismiss', id),
     release: (id: string) => invoke('handoffs:release', id),
+    setChildEnded: (input: { sessionId: string; ended: boolean }) =>
+      invoke('handoffs:set-child-ended', input),
     learnChildRule: (input: { tool?: string; command?: string }) =>
       invoke('handoffs:learn-child-rule', input),
     childLink: (sessionId: string) => invoke('handoffs:child-link', sessionId),
@@ -437,6 +439,7 @@ const api: Api = {
       invoke('handoffs:set-mother', input),
     detachChild: (sessionId: string) => invoke('handoffs:detach-child', sessionId),
     resume: (id: string) => invoke('handoffs:resume', id),
+    wakeChild: (id: string) => invoke('handoffs:wake-child', id),
     isResumable: (id: string) => invoke('handoffs:is-resumable', id),
     spawnContext: (id: string) => invoke('handoffs:spawn-context', id),
     onUpdated: (handler) => subscribe<unknown>('handoff:updated', handler),

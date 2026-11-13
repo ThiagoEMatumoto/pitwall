@@ -93,6 +93,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
   const deps: IdleHibernatorDeps = {
     lazyRestore: () => true,
     afterMin: () => 30,
+    childAfterMin: () => 15,
     candidates: unused,
     hasPane: unused,
     lastIoAt: unused,
@@ -100,7 +101,7 @@ function setup(opts: { screen?: Screen | null; status?: LiveStatus } = {}) {
     isPidAlive: unused,
     aliveSessionId: unused,
     activeHandoffCcSessionIds: unused,
-    isHandoffChild: unused,
+    handoffChildKind: unused,
     queueHas: unused,
     transcriptPath: unused,
     scanTranscript: unused,
@@ -245,6 +246,60 @@ describe('H3: entregue', () => {
     expect(hibernator.onUserInput(PTY, 'oi\r')).toBe(false)
     expect(exit()).toBeNull()
     expect(hibernator.getStats().hibernated).toBe(0)
+  })
+})
+
+// A filha de handoff concluído dorme sem aba: nada de pane dormant para acordar.
+describe('filha concluída: /exit entregue, exit sem dormant', () => {
+  const CHILD_EVENT = { sessionId: PTY, ccSessionId: CC, paneId: null, child: true }
+
+  it('o exit conta a hibernação e o evento diz que é filha', async () => {
+    const { hibernator, writes, exit, registered } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, null, true)).toBe(true)
+    expect(writes).toEqual([`${PTY}:/exit`])
+    expect(hibernator.isHibernating(PTY)).toBe(true)
+    expect(exit()).toEqual(CHILD_EVENT)
+    expect(registered).toEqual([])
+    expect(hibernator.getStats().hibernated).toBe(1)
+  })
+
+  it('minimizar a aba com o /exit em curso não cancela: ela não depende da pane', async () => {
+    const { hibernator, exit, warnings } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, null, true)).toBe(true)
+    hibernator.onPaneClosed(PTY)
+    expect(warnings).not.toContainEqual({ event: 'hibernate_cancelled_by_close', sessionId: PTY })
+    expect(hibernator.isHibernating(PTY)).toBe(true)
+    expect(exit()).toEqual(CHILD_EVENT)
+    expect(hibernator.getStats().hibernated).toBe(1)
+  })
+
+  // Os dois ouvintes do exit não têm ordem garantida.
+  it.each([
+    ['o hibernador ouve o exit antes da fila', true],
+    ['a fila ouve o exit antes do hibernador', false],
+  ])('mensagem com o /exit em voo (%s) espera a conversa voltar', async (_n, hibernatorFirst) => {
+    const { queue, hibernator, writes, state, wakeRequests, wakeFailures } = setup()
+    expect(await hibernator.hibernate(CANDIDATE, null, true)).toBe(true)
+    const sent = await queue.send({ sessionId: PTY, text: 'pergunta da mãe', when: 'on-idle' })
+    expect(sent).toMatchObject({ ok: true, delivered: false })
+    state.running.delete(PTY)
+    if (!hibernatorFirst) queue.onSessionExit(PTY)
+    expect(hibernator.onExit(PTY)).toEqual(CHILD_EVENT)
+    if (hibernatorFirst) queue.onSessionExit(PTY)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wakeRequests).toEqual([])
+    expect(wakeFailures).toEqual([])
+    expect(queue.snapshot().counters.sessionGone).toBe(0)
+    expect(queue.snapshot().items).toEqual([
+      expect.objectContaining({ text: 'pergunta da mãe', recovery: 'awaiting-session' }),
+    ])
+
+    // Acordada (resume) numa PTY nova: o item sai uma vez só, nela.
+    state.running.add(WOKEN)
+    queue.onSessionLive(WOKEN)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(writes).toEqual([`${PTY}:/exit`, `${WOKEN}:pergunta da mãe`])
+    queue.dispose()
   })
 })
 

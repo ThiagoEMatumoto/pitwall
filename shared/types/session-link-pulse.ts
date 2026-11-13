@@ -19,5 +19,8 @@ export interface SessionLinkPulse {
   kind: SessionLinkPulseKind
   // Legenda curta pt-BR ("mãe → otavio: mensagem"), para tooltip/aria-live.
   label?: string
+  // 'human' = o usuário escreveu por uma superfície do app, ainda que o fio seja o
+  // da mãe. Ausente = um agente (tool MCP, SendMessage do transcript) ou o app.
+  by?: 'human'
   at: number
 }

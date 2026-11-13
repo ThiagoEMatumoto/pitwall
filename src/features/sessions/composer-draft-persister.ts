@@ -11,8 +11,9 @@ import type {
 // trabalho do usuário:
 //  - nada é gravado antes da hidratação: o estado do mount não pode sobrescrever
 //    o rascunho que ainda está sendo lido;
-//  - se o usuário digitou antes da leitura terminar, salvo e digitado são
-//    JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
+//  - o Composer fica só-leitura até a leitura terminar; se ela estourar o teto
+//    (DRAFT_HYDRATE_LOCK_MS) e o usuário digitar antes dela, salvo e digitado
+//    são JUNTADOS (nenhum dos dois é descartado) e o Composer avisa;
 //  - blur e troca de pane gravam na hora pelo flush assíncrono: não seguram o
 //    renderer à espera do main;
 //  - flushSync grava na hora por IPC síncrono (unload, pedido do main no
@@ -38,6 +39,9 @@ export interface DraftApi {
 }
 
 export const DRAFT_DEBOUNCE_MS = 500
+// Teto do campo só-leitura à espera da leitura do rascunho salvo: se o main não
+// responder, o Composer destrava e a junção salvo + digitado volta a valer.
+export const DRAFT_HYDRATE_LOCK_MS = 1000
 
 // 'pane:<id>' atravessa o restore (inclusive a sessão sem transcript que renasce
 // com outro cc no mesmo paneId); sem pane (quick look), o cc identifica a conversa.
@@ -72,7 +76,8 @@ export type ApplyDraft = (state: DraftState, merged: boolean) => void
 
 export interface DraftPersister {
   // Lê o rascunho salvo e o entrega ao `apply` (direto, ou juntado ao digitado).
-  hydrate(apply: ApplyDraft): Promise<void>
+  // Resolve false quando a leitura falhou: o salvo continua desconhecido.
+  hydrate(apply: ApplyDraft): Promise<boolean>
   // Estado em memória do mesmo processo (remount): é mais novo que o banco, então
   // dispensa a leitura e vale como hidratado.
   seed(state: DraftState): void
@@ -84,8 +89,10 @@ export interface DraftPersister {
   // Envia e, SÓ se `send` confirmar (resolver true), remove o rascunho enviado.
   // Falha (false ou throw) mantém o rascunho intacto.
   sendThenClear(sentText: string, send: () => Promise<boolean>): Promise<boolean>
-  // Desmonte: grava o pendente síncrono e para de aplicar na UI.
-  dispose(): void
+  // Desmonte: grava o pendente síncrono e para de aplicar na UI. Devolve a junção
+  // salvo + digitado quando foi o próprio desmonte que leu o salvo (a leitura
+  // assíncrona não tinha voltado): a UI não a recebeu, quem desmonta a guarda.
+  dispose(): DraftState | null
 }
 
 // Persisters vivos, para o flush global (beforeunload, troca de pane, pedido do main).
@@ -220,20 +227,24 @@ export function createDraftPersister(opts: {
       apply = fn
       if (!key) {
         hydrated = true
-        return
+        return true
       }
       let saved: ComposerDraft | null = null
+      let read = true
       try {
         saved = await api.get(key)
       } catch (err) {
+        read = false
         console.error('[composer] falha ao ler o rascunho salvo:', err)
       }
       resolveSaved(saved)
+      return read
     },
 
     seed(state) {
       hydrated = true
-      changed(state)
+      // Remount de pane já lida e vazia: o banco também está vazio, nada a gravar.
+      if (!sameState(state, latest)) changed(state)
     },
 
     update(state) {
@@ -272,11 +283,13 @@ export function createDraftPersister(opts: {
     dispose() {
       disposed = true
       live.delete(persister)
+      const unread = !hydrated
       // Save em voo já está na fila do IPC e o renderer segue vivo: só o que
       // ainda não saiu vai pelo síncrono.
       if (dirty) flushSync()
       // O síncrono falhou: última tentativa pelo caminho assíncrono.
       if (dirty) void write()
+      return unread && hydrated ? latest : null
     },
   }
   live.add(persister)

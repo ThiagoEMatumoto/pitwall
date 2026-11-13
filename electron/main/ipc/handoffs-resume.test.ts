@@ -163,6 +163,7 @@ vi.mock('../services/handoff-store', () => ({
 }))
 
 import { registerSessionIpc, resumeHandoffChild } from './sessions'
+import { wakeHandoffChild } from '../services/handoff/spawn-child'
 import { HANDOFF_CHILD_DENY } from '../services/spawn-flags'
 import * as handoffStore from '../services/handoff-store'
 const markRunning = vi.mocked(handoffStore.markRunning)
@@ -196,6 +197,8 @@ function baseHandoff(over: Partial<Handoff> = {}): Handoff {
     dismissedAt: null,
     resumable: false,
     predecessorSessionId: null,
+    endedByUserAt: null,
+    childAsleep: false,
     ...over,
   }
 }
@@ -594,6 +597,39 @@ describe('resumeHandoffChild — kickoff do relance', () => {
 
   it('sem kickoff explícito: resumeHandoffChild não injeta nada', () => {
     const { session } = resumeHandoffChild('h1')
+    expect(injectedCommands(session.id)).toHaveLength(0)
+  })
+
+  // Acordar a filha que dorme (card "Dormindo" e handoff_message da mãe): o mesmo
+  // relance, com a identidade dela, e sem mandar trabalhar.
+  it('handoffs:wake-child: sobe a filha concluída sem kickoff e devolve a sessão acordada', () => {
+    handoff = baseHandoff({ status: 'done' })
+    const woken = handlers.get('handoffs:wake-child')!(null, 'h1') as {
+      handoff: Handoff
+      sessionId: string
+    }
+    expect(spawns).toHaveLength(1)
+    expect(woken.sessionId).toBe(insertedSessionIds[0])
+    expect(woken.handoff.status).toBe('done')
+    expect(markRunning).not.toHaveBeenCalled()
+    expect(spawns[0].innerCmd).toContain("-n 'alias-filha'")
+    expect(spawns[0].innerCmd).toContain('--settings')
+    expect(injectedCommands(woken.sessionId)).toHaveLength(0)
+  })
+
+  it('handoffs:wake-child com a filha já viva: devolve a sessão dela, sem segundo processo', () => {
+    handoff = baseHandoff({ status: 'done' })
+    liveSessionIds = ['child-internal-1']
+    const woken = handlers.get('handoffs:wake-child')!(null, 'h1') as { sessionId: string }
+    expect(spawns).toHaveLength(0)
+    expect(woken.sessionId).toBe('child-internal-1')
+  })
+
+  it('seam do MCP (wakeHandoffChild): o mesmo relance, sem kickoff', () => {
+    handoff = baseHandoff({ status: 'done' })
+    const session = wakeHandoffChild('h1')
+    expect(spawns).toHaveLength(1)
+    expect(session.id).toBe(insertedSessionIds[0])
     expect(injectedCommands(session.id)).toHaveLength(0)
   })
 })

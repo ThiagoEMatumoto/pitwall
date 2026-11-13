@@ -21,8 +21,13 @@ import { app } from 'electron'
 import { closeDb, getDb } from '../db'
 import * as handoffStore from '../handoff-store'
 import * as requestStore from '../handoff-requests'
-import { scanTranscriptForSendMessage, setSendMessageObserver } from '../session-link-pulse'
+import {
+  onSessionLinkPulse,
+  scanTranscriptForSendMessage,
+  setSendMessageObserver,
+} from '../session-link-pulse'
 import { answerCitedRequests } from './cited-answer'
+import type { SessionLinkPulse } from '../../../../shared/types/session-link-pulse'
 
 const FIXTURE = readFileSync(
   join(
@@ -125,5 +130,26 @@ describe('answerCitedRequests', () => {
     const { request } = handoffStore.ask(handoffId, 'q', `child-${n}`)
     motherSends(motherCc, 'segue o plano')
     expect(requestStore.get(request!.id)!.status).toBe('open')
+  })
+})
+
+// É este pulso que marca a filha em segundo plano como não lida (child-activity-store):
+// o SendMessage não passa pelo app, o transcript da mãe é a única testemunha.
+describe('pulso do SendMessage da mãe', () => {
+  it('sai da mãe para a filha, como mensagem de agente', () => {
+    const { motherCc } = seed()
+    const heard: SessionLinkPulse[] = []
+    const off = onSessionLinkPulse((p) => heard.push(p))
+
+    motherSends(motherCc, 'segue o plano')
+    off()
+
+    expect(heard).toHaveLength(1)
+    expect(heard[0]).toMatchObject({
+      fromSessionId: `mother-${n}`,
+      toSessionId: `child-${n}`,
+      kind: 'message',
+    })
+    expect(heard[0].by).toBeUndefined()
   })
 })

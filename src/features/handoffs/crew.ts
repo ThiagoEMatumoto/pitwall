@@ -60,8 +60,17 @@ export function splitAlias(alias: string | null | undefined): AliasParts | null 
 // O que dockCrew NÃO faz é mexer no gate de status: uma filha interrompida
 // continua no dock (dá pra retomar) sem por isso ser escondida da strip — ela nem
 // tem PTY pra esconder de lugar nenhum.
+//
+// A concluída que dorme também fica: sem processo, este card é o único lugar de
+// onde o usuário a acorda. Ela não volta a ser liderada (isLedByMother): o
+// trabalho foi entregue, e o bastão e o badge da mãe não a contam.
 export function dockCrew(handoffs: Handoff[]): Handoff[] {
-  return handoffs.filter(isLedByMother)
+  return handoffs.filter((h) => isLedByMother(h) || isAsleepChild(h))
+}
+
+// Dormindo e ainda no painel: arquivar o card (dismissedAt) tira daqui.
+function isAsleepChild(h: Pick<Handoff, 'childAsleep' | 'dismissedAt'>): boolean {
+  return h.childAsleep && h.dismissedAt == null
 }
 
 // Filhas que ficam FORA das superfícies de sessão do usuário (barra, switcher,
@@ -182,7 +191,8 @@ export function paneShowsLive(pane: OpenPaneRef, live: LiveSessionInfo): boolean
   return paneLiveKey(pane) === live.ccSessionId
 }
 
-// Onde o terminal desta filha deve aparecer quando pedem "abrir terminal".
+// Onde o terminal desta filha deve aparecer quando o quick look pede "Ver o
+// terminal". O card do dock não passa por aqui: "Abrir na aba" vai direto à aba.
 //
 // 'modal': dentro do quick look, em janela, sem promover a filha a pane — "só
 // vou dar uma olhada" não põe o botão de encerrar a sessão a um clique.

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LiveSessionInfo } from '../../../shared/types/ipc'
 
@@ -33,13 +33,15 @@ vi.mock('./useGlobalSessions', async (importOriginal) => ({
 }))
 vi.mock('./useWaitingCount', () => ({ useWaitingCount: () => 0 }))
 // Pins têm persistência própria (prefs assíncronas) e nada a ver com a marca.
+const pinnedIds: string[] = []
+const togglePin = vi.fn()
 vi.mock('./strip-pins-store', () => ({
   useStripPinsStore: (sel: (s: unknown) => unknown) =>
     sel({
-      pinnedIds: [],
+      pinnedIds,
       loaded: true,
       load: vi.fn().mockResolvedValue(undefined),
-      togglePin: vi.fn(),
+      togglePin,
       prune: vi.fn().mockResolvedValue(undefined),
     }),
 }))
@@ -51,8 +53,13 @@ vi.mock('@/store/appStore', () => ({
       panes: [],
       focusPaneId: vi.fn(),
       focusOrOpenSession: openSession,
-      endSession: vi.fn(),
     }),
+}))
+// O Encerrar da barra passa pelo pedido com confirmação (end-child), não direto
+// pelo store.
+const endSessionAsked = vi.fn()
+vi.mock('@/features/handoffs/end-child', () => ({
+  endSessionAsked: (sessionId: string) => endSessionAsked(sessionId),
 }))
 
 const { SessionStrip } = await import('./SessionStrip')
@@ -60,6 +67,7 @@ const { useSessionFeatureStore } = await import('@/store/sessionFeatureStore')
 const { useSessionGraphStore } = await import('@/features/sessions/session-graph-store')
 const { useMotherPinsStore } = await import('@/features/sessions/mother-pins-store')
 const { useFocusFilterStore } = await import('@/lib/focus-filter-store')
+const { useChildActivityStore } = await import('@/features/handoffs/child-activity-store')
 
 function makeSession(over: Partial<LiveSessionInfo> = {}): LiveSessionInfo {
   return {
@@ -88,8 +96,11 @@ beforeAll(() => {
 beforeEach(() => {
   navigateToFeature.mockClear()
   openSession.mockClear()
+  togglePin.mockClear()
   sessions.length = 0
   background.length = 0
+  pinnedIds.length = 0
+  useChildActivityStore.setState({ unread: {} })
   useSessionFeatureStore.setState({
     bySessionId: { 's-1': 'f-42' },
     featureTitles: { 'f-42': 'Extração TRF4' },
@@ -219,6 +230,57 @@ describe('SessionStrip — filhas em segundo plano', () => {
     sessions.push(named('mae'))
     setup([node('mae')], false)
     expect(screen.queryByTestId('strip-background-children')).not.toBeInTheDocument()
+  })
+
+  describe('não lida', () => {
+    const family = () => {
+      sessions.push(named('mae'))
+      background.push(named('helena-auth'), named('caio-db'))
+      return [
+        node('mae'),
+        node('helena-auth', { hierarchyMotherId: 'mae' }),
+        node('caio-db', { hierarchyMotherId: 'mae' }),
+      ]
+    }
+
+    it('mensagem da mãe: ponto no chip agregado e no item daquela filha', () => {
+      useChildActivityStore.setState({ unread: { 'caio-db': 'message' } })
+      setup(family(), false)
+
+      const chip = screen.getByTestId('strip-background-children')
+      expect(within(chip).getByTestId('strip-background-unread')).toBeInTheDocument()
+      expect(chip.title).toContain('1 com novidade que você não viu')
+
+      fireEvent.click(chip)
+      const item = screen.getByText('● caio-db · ocioso')
+      expect(item.closest('button')).toHaveAttribute(
+        'title',
+        'a mãe mandou mensagem e você ainda não abriu a aba',
+      )
+      expect(screen.getByText('helena-auth · ocioso')).toBeInTheDocument()
+      fireEvent.click(item)
+      expect(openSession).toHaveBeenCalledWith(background[1])
+    })
+
+    it('voltou a trabalhar sem aba: o item diz o motivo', () => {
+      useChildActivityStore.setState({ unread: { 'helena-auth': 'activity' } })
+      setup(family(), false)
+
+      fireEvent.click(screen.getByTestId('strip-background-children'))
+      expect(screen.getByText('● helena-auth · ocioso').closest('button')).toHaveAttribute(
+        'title',
+        'voltou a trabalhar sem aba aberta',
+      )
+    })
+
+    it('sem marca nas filhas deste chip não há ponto', () => {
+      useChildActivityStore.setState({ unread: { 'filha-de-outra-mae': 'message' } })
+      setup(family(), false)
+
+      const chip = screen.getByTestId('strip-background-children')
+      expect(within(chip).queryByTestId('strip-background-unread')).not.toBeInTheDocument()
+      expect(chip.title).not.toContain('novidade')
+    })
   })
 
   // jsdom não tem layout: a barra mede pelos retângulos [left, right] dados aqui,
@@ -371,6 +433,7 @@ describe('SessionStrip — clique no chip', () => {
     fireEvent.click(screen.getByLabelText('Encerrar o processo desta sessão'))
     fireEvent.click(screen.getByLabelText('Fixar no início da barra'))
     expect(openSession).not.toHaveBeenCalled()
+    expect(endSessionAsked).toHaveBeenCalledWith('s-curta')
   })
 
   // jsdom não tem layout. O que dá para travar é o contrato de CSS que faz o chip
@@ -385,5 +448,45 @@ describe('SessionStrip — clique no chip', () => {
     expect(classes).not.toContain('absolute')
     expect(classes).not.toContain('hidden')
     expect(parseFloat(actions.style.marginLeft)).toBeGreaterThan(0)
+  })
+})
+
+describe('SessionStrip — chip fixado', () => {
+  // O indicador de fixado dividia a célula do grid com as ações do hover, que
+  // ficam por cima: o ponteiro indo desafixar acertava "Marcar como mãe" (nome
+  // curto) ou "Encerrar" (nome longo). jsdom não tem layout: o que dá para travar
+  // é o indicador numa coluna só dele e a faixa de ações contida na dela.
+  it('o indicador de fixado fica fora da célula das ações do hover', () => {
+    sessions.push(
+      makeSession({ id: 's-fixa', ccSessionId: 'cc-fixa', name: 'pw' }),
+      makeSession({ id: 's-solta', ccSessionId: 'cc-solta', name: 'px' }),
+    )
+    pinnedIds.push('s-fixa')
+    useSessionGraphStore.setState({ graph: { nodes: [], lanes: [], edges: [] } })
+    useMotherPinsStore.setState({ keys: [], loaded: true })
+    useFocusFilterStore.setState({ enabled: false, loaded: true, load: async () => {} } as never)
+    render(<SessionStrip onOpenSwitcher={() => {}} />)
+
+    const [pinned, loose] = [...document.querySelectorAll<HTMLElement>('[data-strip-chip]')].map(
+      (chip) => ({ chip, actions: within(chip).getByTestId('strip-chip-actions') }),
+    )
+    const unpin = within(pinned.chip).getByLabelText('Desafixar do início da barra')
+    const unpinCell = [...pinned.chip.children].find((child) => child.contains(unpin))!
+    const pinnedClasses = pinned.actions.className.split(/\s+/)
+
+    expect(pinned.actions).not.toContainElement(unpin)
+    expect(within(pinned.chip).queryByLabelText('Fixar no início da barra')).not.toBeInTheDocument()
+    expect(unpinCell.className.split(/\s+/)).toContain('col-start-2')
+    expect(pinnedClasses).toContain('col-start-1')
+    // Sem margem negativa a faixa termina na própria coluna, antes do indicador.
+    expect(pinnedClasses.filter((name) => name.startsWith('-mr-'))).toEqual([])
+
+    // Sem fixar, a faixa segue até a borda do chip e leva o botão de fixar.
+    expect(loose.actions.className.split(/\s+/)).toContain('-mr-2.5')
+    expect(within(loose.actions).getByLabelText('Fixar no início da barra')).toBeInTheDocument()
+
+    fireEvent.click(unpin)
+    expect(togglePin).toHaveBeenCalledWith('s-fixa')
+    expect(openSession).not.toHaveBeenCalled()
   })
 })
