@@ -10,8 +10,14 @@ import { backfillRepoRemotes } from '../services/git-remote'
 import { resolveRepoPath } from '../services/repo-path'
 import { cloneMissingRepos, listMissingRepos } from '../services/repo-clone'
 import { pullAllRepos, pullOneRepo } from '../services/repo-pull'
-import { getLastPullRun, recordPullRun, type PullRunTrigger } from '../services/repo-pull-store'
-import { emitToast } from '../services/notifications'
+import {
+  getLastPullRun,
+  listPullRuns,
+  recordPullRun,
+  type PullRunTrigger,
+} from '../services/repo-pull-store'
+import { formatStuckAlert, reposToAlert, STUCK_RUN_THRESHOLD } from '../services/repo-pull-alerts'
+import { emitToast, notify } from '../services/notifications'
 import { validateBlankRepoName } from './blank-repo'
 import type { CloneMissingResult, PullRepoResult } from '../../../shared/types/ipc'
 
@@ -71,12 +77,21 @@ export async function cloneMissingWithToasts(): Promise<CloneMissingResult[]> {
 // O resumo SEMPRE aparece no disparo manual (mesmo com 0 atualizados: o usuário
 // clicou e precisa de resposta) e sempre que houve erro; no cron, só quando há
 // algo a mostrar.
+// Toast some sozinho; repo travado run após run precisa de aviso que fique.
+// threshold+1 runs: é a run além do limiar que diz se a sequência acabou de
+// cruzá-lo (avisa) ou já vinha de antes (já avisou).
+function notifyStuckRepos(): void {
+  const stuck = reposToAlert(listPullRuns({ limit: STUCK_RUN_THRESHOLD + 1 }))
+  if (stuck.length > 0) notify(formatStuckAlert(stuck))
+}
+
 export async function pullAllWithToasts(trigger: PullRunTrigger): Promise<PullRepoResult[]> {
   const startedAt = Date.now()
   const results = await pullAllRepos(({ index, total, label }) => {
     emitToast('Atualizando repositórios', `git pull ${index} de ${total}: ${label}`)
   })
   recordPullRun({ trigger, startedAt, finishedAt: Date.now(), results })
+  notifyStuckRepos()
   const pulled = results.filter((r) => r.status === 'pulled').length
   const skipped = results.filter((r) => r.status === 'skipped').length
   const errored = results.filter((r) => r.status === 'error').length

@@ -71,6 +71,12 @@ const PULL_REASON_LABEL: Record<string, string> = {
   'untracked-collision': 'arquivo não rastreado seria sobrescrito pelo remote',
   'checked-out-elsewhere-untracked-collision':
     'outra worktree com arquivo não rastreado que seria sobrescrito',
+  'no-upstream': 'branch sem upstream e sem branch de mesmo nome no origin',
+  'git-op-in-progress': 'operação git em andamento (bisect, rebase, merge...)',
+  'detached-dirty': 'HEAD destacado com mudanças locais',
+  'detached-unique-commits': 'HEAD destacado com commits fora de qualquer branch do origin',
+  'detached-no-default': 'HEAD destacado e branch default não resolvida',
+  'detached-default-not-synced': 'HEAD destacado e branch default local fora do origin',
 }
 
 const LINK_BADGE: Record<LinkKind, { icon: ComponentType<LucideProps>; title: string }> = {
@@ -185,6 +191,7 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
   // (branch suja/divergente) e o repo segue para trás do origin.
   const behind = useRepoPullStore((s) => s.statusByRepo[repo.id]?.behind ?? 0)
   const behindReason = useRepoPullStore((s) => s.statusByRepo[repo.id]?.reason)
+  const pullFailed = useRepoPullStore((s) => s.statusByRepo[repo.id]?.status === 'error')
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: repo.id,
   })
@@ -227,6 +234,18 @@ function RepoRow({ repo, project, onUpdate, onRemove }: RepoRowProps) {
             }`}
           >
             {behind} atrás
+          </span>
+        )}
+        {behind === 0 && pullFailed && (
+          <span
+            className="shrink-0 rounded-full border border-[var(--color-danger)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-danger)]"
+            title={`O último pull falhou${
+              behindReason
+                ? ` — ${PULL_REASON_LABEL[behindReason] ?? behindReason.split('\n')[0]}`
+                : ''
+            }`}
+          >
+            pull falhou
           </span>
         )}
 

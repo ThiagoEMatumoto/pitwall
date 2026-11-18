@@ -82,7 +82,7 @@ describe('getLastPullRun', () => {
     expect(repo?.reason).toBeUndefined()
   })
 
-  it('ignora branches sem behind medido (ex.: fetch falhou)', () => {
+  it('fetch falhou: sem behind medido, mas o motivo do erro chega à UI', () => {
     recordPullRun({
       trigger: 'auto',
       startedAt: 1,
@@ -97,6 +97,6 @@ describe('getLastPullRun', () => {
 
     const repo = getLastPullRun()?.repos[0]
     expect(repo?.behind).toBeUndefined()
-    expect(repo?.reason).toBeUndefined()
+    expect(repo?.reason).toBe('boom')
   })
 })

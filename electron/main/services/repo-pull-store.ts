@@ -125,7 +125,10 @@ export function getLastPullRun(): LastPullRun | null {
   if (!run) return null
   const repos: RepoPullStatus[] = run.results.map((r) => {
     const worst = worstBranch(r)
-    return { repoId: r.repoId, status: r.status, behind: worst?.behind, reason: worst?.detail }
+    // Erro sem atraso medido (ex.: fetch falhou) também precisa de motivo na UI.
+    const failed = r.branches?.find((b) => b.status === 'error')
+    const reason = worst?.behind ? worst.detail : (failed?.detail ?? worst?.detail)
+    return { repoId: r.repoId, status: r.status, behind: worst?.behind, reason }
   })
   return { finishedAt: run.finishedAt, trigger: run.trigger, repos }
 }

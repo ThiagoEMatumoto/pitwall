@@ -130,9 +130,12 @@ export interface CloneMissingResult {
 // PullRepoResult). Mesmo vocabulário de status que o agregado. `behind` = quantos
 // commits o ref local ficou atrás do remote-tracking DEPOIS do pull (0 quando
 // avançou, > 0 quando a branch foi pulada); ausente se algum ref não existe.
+// 'reattached' só aparece na entrada 'HEAD': o checkout estava destacado e foi
+// devolvido à default (detail = '<sha>→<destino>'). No agregado do repo conta
+// como 'pulled' (a working tree avançou).
 export interface BranchPullOutcome {
   branch: string
-  status: 'pulled' | 'up-to-date' | 'skipped' | 'error'
+  status: 'pulled' | 'up-to-date' | 'skipped' | 'error' | 'reattached'
   detail?: string
   behind?: number
 }
